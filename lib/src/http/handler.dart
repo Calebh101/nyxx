@@ -149,15 +149,33 @@ class HttpHandler {
   /// response and the request is sent again after the rate limit passes. The response returned is
   /// that of the second request.
   ///
+  /// If the response has a status code of 503, the request will be tried for up to 2 more times
+  /// until a [HttpResponseError] is thrown instead.
+  ///
   /// Otherwise, this method returns a [HttpResponseError].
   ///
   /// This method calls [NyxxPlugin.interceptRequest] on all plugins registered to the [client] which may intercept the [request].
   Future<HttpResponse> execute(HttpRequest request) async {
+    int requests = 0;
+
     final executeFn = client.options.plugins.fold(
       _execute,
       (previousValue, plugin) => (request) => plugin.interceptRequest(client, request, previousValue),
     );
-    return await executeFn(request);
+
+    Future<HttpResponse> eval() async {
+      final result = await executeFn(request);
+      requests++;
+
+      if (result.statusCode == 503 && requests < 2) {
+        if (result is HttpResponseError) logger.severe(result.message, result.errorData, StackTrace.current);
+        return eval();
+      }
+
+      return result;
+    }
+
+    return eval();
   }
 
   Future<HttpResponse> _execute(HttpRequest request) async {
